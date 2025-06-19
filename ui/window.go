@@ -2,11 +2,10 @@
 package ui
 
 import (
-	//"context"
+	"context"
 	"fmt"
 
 	"fyne.io/fyne/v2"
-	//"fyne.io/fyne/v2/app"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/widget"
@@ -35,7 +34,8 @@ type MainWindow struct {
 	
 	// Data
 	availableMods map[string]models.Mod
-	selectedMods  []int
+	modKeys       []string // Pour maintenir l'ordre des mods
+	selectedMods  map[string]bool
 }
 
 // NewMainWindow crée une nouvelle fenêtre principale
@@ -43,20 +43,42 @@ func NewMainWindow(app fyne.App, cfg *config.Config) *MainWindow {
 	window := app.NewWindow("Mod Installer")
 	window.Resize(fyne.NewSize(float32(cfg.WindowWidth), float32(cfg.WindowHeight)))
 	
+	// Charger les mods depuis l'API
+	fmt.Println("Chargement des mods depuis l'API...")
+	availableMods, err := api.FetchAllModMeta()
+	if err != nil {
+		fmt.Printf("Erreur lors du chargement des mods: %v\n", err)
+		fmt.Println("Utilisation des mods d'exemple à la place")
+		// En cas d'erreur, utiliser des mods d'exemple
+		availableMods = getExampleModsMap()
+	}
+	
+	fmt.Printf("Nombre de mods chargés: %d\n", len(availableMods))
+	for key, mod := range availableMods {
+		fmt.Printf("- %s: %s v%s\n", key, mod.Name, mod.Version)
+	}
+	
+	// Créer une slice des clés pour maintenir l'ordre
+	modKeys := make([]string, 0, len(availableMods))
+	for key := range availableMods {
+		modKeys = append(modKeys, key)
+	}
+	
 	mw := &MainWindow{
 		app:           app,
 		window:        window,
 		config:        cfg,
 		downloader:    services.NewDownloadService(cfg.TempPath, cfg.VerifyChecksums),
-		availableMods: api.FetchAllModMeta(), // TODO: charger depuis l'API
-		selectedMods:  make([]int, 0),
+		availableMods: availableMods,
+		modKeys:       modKeys,
+		selectedMods:  make(map[string]bool),
 	}
 	
 	mw.setupUI()
 	return mw
 }
 
-// ALTERNATIVE: setupUI avec VSplit vraiment redimensionnable
+// setupUI configure l'interface utilisateur
 func (mw *MainWindow) setupUI() {
 	// Titre
 	title := widget.NewLabel("Installeur de Mods")
@@ -84,14 +106,14 @@ func (mw *MainWindow) setupUI() {
 		actionSection,
 	)
 	
-	// Section des mods (juste la liste, pas de VBox)
+	// Section des mods
 	modListLabel := widget.NewLabel("Mods disponibles:")
 	modListContainer := container.NewBorder(
 		modListLabel, // top
 		nil,          // bottom
 		nil,          // left
 		nil,          // right
-		mw.createModList(), // center - juste la liste
+		mw.createModList(), // center
 	)
 	
 	// Split 1: partie haute vs (mods + bas)
@@ -132,10 +154,11 @@ func (mw *MainWindow) createGamePathSection() *fyne.Container {
 		container.NewBorder(nil, nil, nil, browseBtn, mw.gamePathEntry),
 	)
 }
-// createModList crée juste la liste sans container supplémentaire
+
+// createModList crée la liste des mods
 func (mw *MainWindow) createModList() *widget.List {
 	mw.modList = widget.NewList(
-		func() int { return len(mw.availableMods) },
+		func() int { return len(mw.modKeys) },
 		func() fyne.CanvasObject {
 			check := widget.NewCheck("", nil)
 			nameLabel := widget.NewLabel("Nom du mod")
@@ -148,7 +171,16 @@ func (mw *MainWindow) createModList() *widget.List {
 			)
 		},
 		func(id widget.ListItemID, item fyne.CanvasObject) {
-			mod := mw.availableMods[id]
+			if id >= len(mw.modKeys) {
+				return
+			}
+			
+			modKey := mw.modKeys[id]
+			mod, exists := mw.availableMods[modKey]
+			if !exists {
+				return
+			}
+			
 			vbox := item.(*fyne.Container)
 			topRow := vbox.Objects[0].(*fyne.Container)
 			
@@ -165,15 +197,16 @@ func (mw *MainWindow) createModList() *widget.List {
 			
 			// Gestion de la sélection
 			check.OnChanged = nil
-			check.SetChecked(mw.isModSelected(id))
+			check.SetChecked(mw.selectedMods[modKey])
 			check.OnChanged = func(checked bool) {
-				mw.toggleModSelection(id, checked)
+				mw.toggleModSelection(modKey, checked)
 			}
 		},
 	)
 	
 	return mw.modList
 }
+
 // createProgressSection crée la section de progression
 func (mw *MainWindow) createProgressSection() *fyne.Container {
 	mw.progressBar = widget.NewProgressBar()
@@ -207,33 +240,19 @@ func (mw *MainWindow) ShowAndRun() {
 }
 
 // Méthodes utilitaires
-func (mw *MainWindow) isModSelected(id int) bool {
-	for _, selectedID := range mw.selectedMods {
-		if selectedID == id {
-			return true
-		}
-	}
-	return false
-}
-
-func (mw *MainWindow) toggleModSelection(id int, selected bool) {
-	if selected {
-		if !mw.isModSelected(id) {
-			mw.selectedMods = append(mw.selectedMods, id)
-		}
-	} else {
-		for i, selectedID := range mw.selectedMods {
-			if selectedID == id {
-				mw.selectedMods = append(mw.selectedMods[:i], mw.selectedMods[i+1:]...)
-				break
-			}
-		}
-	}
+func (mw *MainWindow) toggleModSelection(modKey string, selected bool) {
+	mw.selectedMods[modKey] = selected
 	mw.updateStatus()
 }
 
 func (mw *MainWindow) updateStatus() {
-	count := len(mw.selectedMods)
+	count := 0
+	for _, selected := range mw.selectedMods {
+		if selected {
+			count++
+		}
+	}
+	
 	if count == 0 {
 		mw.statusLabel.SetText("Prêt")
 	} else {
@@ -242,30 +261,129 @@ func (mw *MainWindow) updateStatus() {
 }
 
 func (mw *MainWindow) installSelectedMods() {
-	if len(mw.selectedMods) == 0 {
+	selectedCount := 0
+	selectedModKeys := make([]string, 0)
+	
+	for key, selected := range mw.selectedMods {
+		if selected {
+			selectedCount++
+			selectedModKeys = append(selectedModKeys, key)
+		}
+	}
+	
+	if selectedCount == 0 {
 		dialog.ShowInformation("Aucune sélection", "Veuillez sélectionner au moins un mod", mw.window)
 		return
 	}
 	
-	// TODO: Implémenter l'installation
-	mw.statusLabel.SetText("Installation en cours...")
-	mw.progressBar.Show()
-	mw.installBtn.Disable()
+	// Vérifier le chemin du jeu
+	gamePath := mw.gamePathEntry.Text
+	if gamePath == "" {
+		dialog.ShowError(fmt.Errorf("chemin du jeu non défini"), mw.window)
+		return
+	}
 	
-	// Simulation pour l'exemple
-	go func() {
-		// Installation asynchrone ici
-		// ...
-		
-		mw.progressBar.Hide()
-		mw.installBtn.Enable()
-		mw.statusLabel.SetText("Installation terminée")
+	// Démarrer l'installation asynchrone
+	fyne.Do(func() {
+		mw.statusLabel.SetText("Préparation de l'installation...")
+		mw.progressBar.Show()
+		mw.progressBar.SetValue(0)
+		mw.installBtn.Disable()
+	})
+	
+	go mw.performInstallation(selectedModKeys, gamePath)
+}
+
+// performInstallation effectue l'installation des mods sélectionnés
+func (mw *MainWindow) performInstallation(modKeys []string, gamePath string) {
+	defer func() {
+		fyne.Do(func() {
+			mw.progressBar.Hide()
+			mw.installBtn.Enable()
+		})
 	}()
+	
+	totalMods := len(modKeys)
+	ctx := context.Background()
+	
+	for i, modKey := range modKeys {
+		mod, exists := mw.availableMods[modKey]
+		if !exists {
+			continue
+		}
+		
+		// Mettre à jour le statut (thread-safe)
+		fyne.Do(func() {
+			mw.statusLabel.SetText(fmt.Sprintf("Installation de %s (%d/%d)...", mod.Name, i+1, totalMods))
+		})
+		
+		// Callback de progression pour ce mod
+		progressCallback := func(downloaded, total int64) {
+			if total > 0 {
+				modProgress := float64(downloaded) / float64(total)
+				overallProgress := (float64(i) + modProgress) / float64(totalMods)
+				
+				// Mettre à jour la barre de progression (thread-safe)
+				fyne.Do(func() {
+					mw.progressBar.SetValue(overallProgress)
+				})
+			}
+		}
+		
+		// Télécharger le mod
+		filePath, err := mw.downloader.DownloadMod(ctx, &mod, progressCallback)
+		if err != nil {
+			// Afficher l'erreur (thread-safe)
+			fyne.Do(func() {
+				mw.statusLabel.SetText(fmt.Sprintf("Erreur lors du téléchargement de %s: %v", mod.Name, err))
+				dialog.ShowError(fmt.Errorf("erreur installation %s: %w", mod.Name, err), mw.window)
+			})
+			return
+		}
+		
+		// TODO: Ici vous pourriez ajouter l'extraction et l'installation
+		fmt.Printf("Fichier téléchargé: %s\n", filePath)
+		
+		// Mettre à jour la progression (thread-safe)
+		overallProgress := float64(i+1) / float64(totalMods)
+		fyne.Do(func() {
+			mw.progressBar.SetValue(overallProgress)
+		})
+	}
+	
+	// Installation terminée (thread-safe)
+	fyne.Do(func() {
+		mw.statusLabel.SetText(fmt.Sprintf("Installation terminée (%d mods)", totalMods))
+		
+		// Afficher les informations du cache
+		if cacheDir, size, count, err := mw.downloader.GetCacheInfo(); err == nil {
+			sizeStr := formatFileSize(size)
+			message := fmt.Sprintf("Installation terminée!\n\nCache: %s\nTaille: %s (%d fichiers)", 
+				cacheDir, sizeStr, count)
+			dialog.ShowInformation("Installation terminée", message, mw.window)
+		}
+	})
 }
 
 func (mw *MainWindow) refreshModList() {
-	// TODO: Recharger depuis l'API
-	mw.selectedMods = make([]int, 0)
+	// Recharger depuis l'API
+	availableMods, err := api.FetchAllModMeta()
+	if err != nil {
+		// En cas d'erreur, garder les mods actuels
+		dialog.ShowError(err, mw.window)
+		return
+	}
+	
+	mw.availableMods = availableMods
+	
+	// Recréer la liste des clés
+	mw.modKeys = make([]string, 0, len(availableMods))
+	for key := range availableMods {
+		mw.modKeys = append(mw.modKeys, key)
+	}
+	
+	// Réinitialiser les sélections
+	mw.selectedMods = make(map[string]bool)
 	mw.modList.Refresh()
 	mw.updateStatus()
 }
@@ -284,9 +402,9 @@ func formatFileSize(bytes int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
-func getExampleMods() []models.Mod {
-	return []models.Mod{
-		{
+func getExampleModsMap() map[string]models.Mod {
+	return map[string]models.Mod{
+		"mod1": {
 			ID:          "mod1",
 			Name:        "Example mod 1",
 			Version:     "1.2.3",
@@ -294,7 +412,7 @@ func getExampleMods() []models.Mod {
 			FileSize:    2048576, // 2MB
 			DownloadURL: "https://example.com/mod1.zip",
 		},
-		{
+		"mod2": {
 			ID:          "mod2",
 			Name:        "Contenu Extra",
 			Version:     "2.0.1",
