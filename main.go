@@ -9,6 +9,7 @@ import (
 	"mod-installer/ui"
 )
 
+
 func main() {
 	// Initialiser la configuration
 	cfg, err := config.Load()
@@ -18,10 +19,9 @@ func main() {
 
 	// Créer l'application Fyne
 	myApp := app.New()
-  iconResource := fyne.NewStaticResource("icon.png", iconData)
-  myApp.SetIcon(iconResource) // Pas d'icône pour simplifier
+	myApp.SetIcon(resourceIconPng)
 	
-  // Créer et afficher la fenêtre principale
+	// Créer et afficher la fenêtre principale
 	mainWindow := ui.NewMainWindow(myApp, cfg)
 	mainWindow.ShowAndRun()
 }

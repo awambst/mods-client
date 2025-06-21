@@ -8,7 +8,7 @@ pkgs.mkShell {
     delve          # Debugger Go
     
     # Cross-compilation pour Windows
-    pkgsCross.mingwW64.stdenv.cc
+    #pkgsCross.mingwW64.stdenv.cc
     pkgsCross.mingwW64.windows.mingw_w64_pthreads
     
     # Dépendances système pour Fyne (GUI)
