@@ -11,6 +11,7 @@ import (
 type Config struct {
 	// Chemins
 	GamePath     string `json:"game_path"`
+	ScriptsPath  string `json:"scripts_path"`  // Nouveau: chemin pour les scripts
 	ModsPath     string `json:"mods_path"`
 	TempPath     string `json:"temp_path"`
 	ConfigPath   string `json:"config_path"`
@@ -36,6 +37,7 @@ func Default() *Config {
 	
 	return &Config{
 		GamePath:               filepath.Join(homeDir, "Games"),
+		ScriptsPath:            filepath.Join(homeDir, "Games", "scripts"), // Chemin par défaut pour les scripts
 		ModsPath:               filepath.Join(homeDir, ".mod-installer", "mods"),
 		TempPath:               filepath.Join(homeDir, ".mod-installer", "temp"),
 		ConfigPath:             filepath.Join(homeDir, ".mod-installer", "config.json"),
@@ -73,7 +75,7 @@ func Load() (*Config, error) {
 	}
 	
 	// Créer les dossiers nécessaires
-	dirs := []string{cfg.ModsPath, cfg.TempPath}
+	dirs := []string{cfg.ModsPath, cfg.TempPath, cfg.ScriptsPath}
 	for _, dir := range dirs {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return nil, err
@@ -96,5 +98,13 @@ func (c *Config) Save() error {
 // SetGamePath met à jour le chemin du jeu et sauvegarde
 func (c *Config) SetGamePath(path string) error {
 	c.GamePath = path
+	// Mettre à jour aussi le chemin des scripts par défaut
+	c.ScriptsPath = filepath.Join(path, "scripts")
+	return c.Save()
+}
+
+// SetScriptsPath met à jour le chemin des scripts et sauvegarde
+func (c *Config) SetScriptsPath(path string) error {
+	c.ScriptsPath = path
 	return c.Save()
 }

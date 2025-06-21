@@ -18,7 +18,8 @@ func main() {
 
 	// Créer l'application Fyne
 	myApp := app.New()
-  myApp.SetIcon(nil) // Pas d'icône pour simplifier
+  iconResource := fyne.NewStaticResource("icon.png", iconData)
+  myApp.SetIcon(iconResource) // Pas d'icône pour simplifier
 	
   // Créer et afficher la fenêtre principale
 	mainWindow := ui.NewMainWindow(myApp, cfg)
