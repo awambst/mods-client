@@ -1,20 +1,22 @@
-package utils;
+package utils
 
 import (
-	"archive/zip"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
-	"time"
 
-	"mod-installer/models"
 	"github.com/nwaples/rardecode/v2"
+
+	"mod-installer/utils/ntw"
 )
 
-func (is *InstallerService) extractRar(ctx context.Context, archivePath string, callback InstallProgressCallback) error {
+// InstallProgressCallback définit le type de callback pour le progrès d'installation
+// Déplacé ici pour éviter l'import cyclique
+type InstallProgressCallback func(currentFile string, processed, total int)
+
+func ExtractRar(ctx context.Context, scriptsPath, gamePath, archivePath string, callback InstallProgressCallback) error {
 	file, err := os.Open(archivePath)
 	if err != nil {
 		return fmt.Errorf("erreur ouverture RAR: %w", err)
@@ -47,9 +49,9 @@ func (is *InstallerService) extractRar(ctx context.Context, archivePath string, 
 		}
 
 		// Déterminer le dossier de destination basé sur l'extension
-		destPath := is.getDestinationPath(header.Name)
+		destPath := ntw.GetDestinationPath(scriptsPath, gamePath, header.Name)
 
-		if err := is.extractFile(header.Name, destPath, header.IsDir, 0644, func() (io.ReadCloser, error) {
+		if err := ExtractFile(header.Name, destPath, header.IsDir, 0644, func() (io.ReadCloser, error) {
 			return io.NopCloser(reader), nil
 		}); err != nil {
 			return fmt.Errorf("erreur extraction %s: %w", header.Name, err)

@@ -12,42 +12,51 @@ import (
 	"time"
 
 	"mod-installer/models"
-  "mod-installer/utils"
+	"mod-installer/config"
+	"mod-installer/utils"
+	"mod-installer/utils/ntw"
 )
 
-type InstallProgressCallback func(currentFile string, processed, total int)
+// Utiliser le type de callback défini dans utils pour éviter l'import cyclique
+type InstallProgressCallback = utils.InstallProgressCallback
 
+// InstallerService gère l'installation des mods
 type InstallerService struct {
-	gamePath, scriptsPath, tempDir, backupDir string
-	makeBackups                               bool
+	GamePath, ScriptsPath, TempDir, BackupDir string
+	MakeBackups                               bool
 }
 
-func NewInstallerService(gamePath, scriptsPath, tempDir string, makeBackups bool) *InstallerService {
-	service := &InstallerService{
-		gamePath:    gamePath,
-		scriptsPath: scriptsPath,
-		tempDir:     tempDir,
-		backupDir:   filepath.Join(tempDir, "backups"),
-		makeBackups: makeBackups,
-	}
-	service.ensureDirectoryExists(service.backupDir)
-	service.ensureDirectoryExists(service.scriptsPath)
-	return service
-}
-
-func (is *InstallerService) ensureDirectoryExists(dir string) error {
+// EnsureDirectoryExists crée un répertoire s'il n'existe pas
+func (is *InstallerService) EnsureDirectoryExists(dir string) error {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return os.MkdirAll(dir, 0755)
 	}
 	return nil
 }
 
+func NewInstallerService(cfg *config.Config) *InstallerService {
+	tempDir := cfg.TempPath
+	backupDir := filepath.Join(tempDir, "backups")
+	
+	service := &InstallerService{
+		GamePath:    cfg.GamePath,
+		ScriptsPath: cfg.ScriptsPath,
+		TempDir:     tempDir,
+		BackupDir:   backupDir,
+		MakeBackups: cfg.CreateBackups,
+	}
+	
+	service.EnsureDirectoryExists(service.BackupDir)
+	service.EnsureDirectoryExists(service.ScriptsPath)
+	return service
+}
+
 func (is *InstallerService) GetDataPath() string {
-	return filepath.Join(is.gamePath, "data")
+	return filepath.Join(is.GamePath, "data")
 }
 
 func (is *InstallerService) GetScriptsPath() string {
-	return is.scriptsPath
+	return is.ScriptsPath
 }
 
 func (is *InstallerService) IsGamePathValid() bool {
@@ -59,10 +68,10 @@ func (is *InstallerService) IsGamePathValid() bool {
 
 func (is *InstallerService) InstallMod(ctx context.Context, mod *models.Mod, archivePath string, callback InstallProgressCallback) error {
 	if !is.IsGamePathValid() {
-		return fmt.Errorf("chemin du jeu invalide: %s", is.gamePath)
+		return fmt.Errorf("chemin du jeu invalide: %s", is.GamePath)
 	}
 
-	if is.makeBackups {
+	if is.MakeBackups {
 		if err := is.createBackup(mod); err != nil {
 			fmt.Printf("Attention: impossible de créer un backup: %v\n", err)
 		}
@@ -71,9 +80,9 @@ func (is *InstallerService) InstallMod(ctx context.Context, mod *models.Mod, arc
 	ext := strings.ToLower(filepath.Ext(archivePath))
 	switch ext {
 	case ".zip":
-		return is.extractZip(ctx, archivePath, callback)
+		return is.extractZip(ctx, is.ScriptsPath, is.GamePath, archivePath, callback)
 	case ".rar":
-		return utils.extractRar(ctx, archivePath, callback)
+		return utils.ExtractRar(ctx, is.ScriptsPath, is.GamePath, archivePath, callback)
 	case ".7z":
 		return fmt.Errorf("format 7z non supporté dans cette version")
 	default:
@@ -81,7 +90,7 @@ func (is *InstallerService) InstallMod(ctx context.Context, mod *models.Mod, arc
 	}
 }
 
-func (is *InstallerService) extractZip(ctx context.Context, archivePath string, callback InstallProgressCallback) error {
+func (is *InstallerService) extractZip(ctx context.Context, scriptsPath, gamePath, archivePath string, callback InstallProgressCallback) error {
 	reader, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return fmt.Errorf("erreur ouverture ZIP: %w", err)
@@ -100,7 +109,7 @@ func (is *InstallerService) extractZip(ctx context.Context, archivePath string, 
 		}
 
 		// Déterminer le dossier de destination basé sur l'extension
-		destPath := is.getDestinationPath(file.Name)
+		destPath := ntw.GetDestinationPath(scriptsPath, gamePath, file.Name)
 
 		if err := is.extractFile(file.Name, destPath, file.FileInfo().IsDir(), file.FileInfo().Mode(), func() (io.ReadCloser, error) {
 			return file.Open()
@@ -109,22 +118,6 @@ func (is *InstallerService) extractZip(ctx context.Context, archivePath string, 
 		}
 	}
 	return nil
-}
-
-
-// getDestinationPath détermine le dossier de destination en fonction de l'extension du fichier
-func (is *InstallerService) getDestinationPath(fileName string) string {
-	ext := strings.ToLower(filepath.Ext(fileName))
-	
-	switch ext {
-	case ".txt":
-		return is.GetScriptsPath()
-	case ".pack":
-		return is.GetDataPath()
-	default:
-		// Pour les autres fichiers, on utilise le dossier data par défaut
-		return is.GetDataPath()
-	}
 }
 
 func (is *InstallerService) extractFile(name, destPath string, isDir bool, mode os.FileMode, opener func() (io.ReadCloser, error)) error {
@@ -160,13 +153,13 @@ func (is *InstallerService) extractFile(name, destPath string, isDir bool, mode 
 }
 
 func (is *InstallerService) createBackup(mod *models.Mod) error {
-	if !is.makeBackups {
+	if !is.MakeBackups {
 		return nil
 	}
 
 	timestamp := time.Now().Format("20060102_150405")
 	backupName := fmt.Sprintf("backup_%s_%s_%s", mod.ID, mod.Version, timestamp)
-	backupPath := filepath.Join(is.backupDir, backupName)
+	backupPath := filepath.Join(is.BackupDir, backupName)
 
 	if err := os.MkdirAll(backupPath, 0755); err != nil {
 		return fmt.Errorf("erreur création dossier backup: %w", err)
@@ -233,7 +226,7 @@ func (is *InstallerService) copyFile(src, dst string) error {
 }
 
 func (is *InstallerService) GetBackups() ([]string, error) {
-	entries, err := os.ReadDir(is.backupDir)
+	entries, err := os.ReadDir(is.BackupDir)
 	if err != nil {
 		return nil, err
 	}
@@ -248,7 +241,7 @@ func (is *InstallerService) GetBackups() ([]string, error) {
 }
 
 func (is *InstallerService) RestoreBackup(backupName string) error {
-	backupPath := filepath.Join(is.backupDir, backupName)
+	backupPath := filepath.Join(is.BackupDir, backupName)
 	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
 		return fmt.Errorf("backup non trouvé: %s", backupName)
 	}
@@ -281,7 +274,7 @@ func (is *InstallerService) RestoreBackup(backupName string) error {
 }
 
 func (is *InstallerService) DeleteBackup(backupName string) error {
-	return os.RemoveAll(filepath.Join(is.backupDir, backupName))
+	return os.RemoveAll(filepath.Join(is.BackupDir, backupName))
 }
 
 func (is *InstallerService) GetInstallationStatus(mod *models.Mod) (bool, error) {
@@ -289,7 +282,7 @@ func (is *InstallerService) GetInstallationStatus(mod *models.Mod) (bool, error)
 }
 
 func (is *InstallerService) Cleanup() error {
-	matches, err := filepath.Glob(filepath.Join(is.tempDir, "install_*"))
+	matches, err := filepath.Glob(filepath.Join(is.TempDir, "TempDir", "install_*"))
 	if err != nil {
 		return err
 	}

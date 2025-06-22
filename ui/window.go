@@ -57,7 +57,7 @@ func NewMainWindow(app fyne.App, cfg *config.Config) *MainWindow {
 		window:        window,
 		config:        cfg,
 		downloader:    services.NewDownloadService(cfg.TempPath, cfg.VerifyChecksums),
-		installer:     services.NewInstallerService(cfg.GamePath, cfg.ScriptsPath, cfg.TempPath, true),
+		installer:     services.NewInstallerService(cfg),
 		availableMods: availableMods,
 		modKeys:       modKeys,
 		selectedMods:  make(map[string]bool),
@@ -76,7 +76,7 @@ func (mw *MainWindow) setupUI() {
 	mw.gamePathEntry.SetText(mw.config.GamePath)
 	mw.gamePathEntry.OnChanged = func(text string) {
 		mw.config.SetGamePath(text)
-		mw.installer = services.NewInstallerService(text, mw.config.ScriptsPath, mw.config.TempPath, mw.backupCheck.Checked)
+		mw.installer = services.NewInstallerService(mw.config)
 		mw.updateGamePathValidation()
 	}
 	
@@ -86,7 +86,7 @@ func (mw *MainWindow) setupUI() {
 				path := uri.Path()
 				mw.gamePathEntry.SetText(path)
 				mw.config.SetGamePath(path)
-				mw.installer = services.NewInstallerService(path, mw.config.ScriptsPath, mw.config.TempPath, mw.backupCheck.Checked)
+				mw.installer = services.NewInstallerService(mw.config)
 				mw.updateGamePathValidation()
 			}
 		}, mw.window)
@@ -97,7 +97,7 @@ func (mw *MainWindow) setupUI() {
 	mw.scriptsPathEntry.SetText(mw.config.ScriptsPath)
 	mw.scriptsPathEntry.OnChanged = func(text string) {
 		mw.config.SetScriptsPath(text)
-		mw.installer = services.NewInstallerService(mw.config.GamePath, text, mw.config.TempPath, mw.backupCheck.Checked)
+		mw.installer = services.NewInstallerService(mw.config)
 	}
 	
 	browseScriptsBtn := widget.NewButton("Parcourir...", func() {
@@ -106,13 +106,13 @@ func (mw *MainWindow) setupUI() {
 				path := uri.Path()
 				mw.scriptsPathEntry.SetText(path)
 				mw.config.SetScriptsPath(path)
-				mw.installer = services.NewInstallerService(mw.config.GamePath, path, mw.config.TempPath, mw.backupCheck.Checked)
+				mw.installer = services.NewInstallerService(mw.config)
 			}
 		}, mw.window)
 	})
 	
 	mw.backupCheck = widget.NewCheck("Créer des backups", func(checked bool) {
-		mw.installer = services.NewInstallerService(mw.config.GamePath, mw.config.ScriptsPath, mw.config.TempPath, checked)
+		mw.installer = services.NewInstallerService(mw.config)
 	})
 	mw.backupCheck.SetChecked(false)
 	
