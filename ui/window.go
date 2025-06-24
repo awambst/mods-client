@@ -20,8 +20,9 @@ type MainWindow struct {
 	window fyne.Window
 	config *config.Config
 	
-	downloader *services.DownloadService
-	installer  *services.InstallerService
+	downloader     *services.DownloadService
+	installer      *services.InstallerService
+	vanillaService *services.VanillaService  // Service séparé pour vanilla
 	
 	gamePathEntry    *widget.Entry
 	scriptsPathEntry *widget.Entry
@@ -40,78 +41,99 @@ func NewMainWindow(app fyne.App, cfg *config.Config) *MainWindow {
 	window := app.NewWindow("Mod Installer")
 	window.Resize(fyne.NewSize(float32(cfg.WindowWidth), float32(cfg.WindowHeight)))
 	
-	fmt.Println("Chargement des mods...")
+	fmt.Println("Loading mods...")
 	availableMods, err := api.FetchAllModMeta()
 	if err != nil {
-		fmt.Printf("Erreur API: %v\n", err)
+		fmt.Printf("API Error: %v\n", err)
 		availableMods = getExampleModsMap()
 	}
 	
-	modKeys := make([]string, 0, len(availableMods))
-	for key := range availableMods {
-		modKeys = append(modKeys, key)
-	}
-	
 	mw := &MainWindow{
-		app:           app,
-		window:        window,
-		config:        cfg,
-		downloader:    services.NewDownloadService(cfg.TempPath, cfg.VerifyChecksums),
-		installer:     services.NewInstallerService(cfg),
-		availableMods: availableMods,
-		modKeys:       modKeys,
-		selectedMods:  make(map[string]bool),
+		app:            app,
+		window:         window,
+		config:         cfg,
+		downloader:     services.NewDownloadService(cfg.TempPath, cfg.VerifyChecksums),
+		installer:      services.NewInstallerService(cfg),
+		vanillaService: services.NewVanillaService(cfg.GamePath, cfg.ScriptsPath, cfg.TempPath),
+		availableMods:  availableMods,
+		selectedMods:   make(map[string]bool),
 	}
 	
+	mw.loadAllMods()
 	mw.setupUI()
 	return mw
 }
 
+func (mw *MainWindow) loadAllMods() {
+	// Charger les mods vanilla
+	if mw.vanillaService != nil {
+		vanillaMod, err := mw.vanillaService.GetVanillaMod()
+		if err == nil {
+			// Fusionner avec les mods existants
+			mw.availableMods[vanillaMod.Name] = vanillaMod
+		}
+	}
+	
+	// Créer la liste des clés
+	mw.modKeys = make([]string, 0, len(mw.availableMods))
+	for key := range mw.availableMods {
+		mw.modKeys = append(mw.modKeys, key)
+	}
+}
+
 func (mw *MainWindow) setupUI() {
-	title := widget.NewLabel("Installeur de Mods")
+	title := widget.NewLabel("Mod Installer")
 	title.TextStyle.Bold = true
 	
-	// Chemin du jeu
+	// Game path
 	mw.gamePathEntry = widget.NewEntry()
 	mw.gamePathEntry.SetText(mw.config.GamePath)
 	mw.gamePathEntry.OnChanged = func(text string) {
 		mw.config.SetGamePath(text)
 		mw.installer = services.NewInstallerService(mw.config)
+		mw.vanillaService = services.NewVanillaService(text, mw.config.ScriptsPath, mw.config.TempPath)
+		mw.loadAllMods()
 		mw.updateGamePathValidation()
 	}
 	
-	browseGameBtn := widget.NewButton("Parcourir...", func() {
+	browseGameBtn := widget.NewButton("Browse...", func() {
 		dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
 			if err == nil && uri != nil {
 				path := uri.Path()
 				mw.gamePathEntry.SetText(path)
 				mw.config.SetGamePath(path)
 				mw.installer = services.NewInstallerService(mw.config)
+				mw.vanillaService = services.NewVanillaService(path, mw.config.ScriptsPath, mw.config.TempPath)
+				mw.loadAllMods()
 				mw.updateGamePathValidation()
 			}
 		}, mw.window)
 	})
 	
-	// Chemin des scripts
+	// Scripts path
 	mw.scriptsPathEntry = widget.NewEntry()
 	mw.scriptsPathEntry.SetText(mw.config.ScriptsPath)
 	mw.scriptsPathEntry.OnChanged = func(text string) {
 		mw.config.SetScriptsPath(text)
+		mw.vanillaService = services.NewVanillaService(mw.config.GamePath, text, mw.config.TempPath)
+		mw.loadAllMods()
 		mw.installer = services.NewInstallerService(mw.config)
 	}
 	
-	browseScriptsBtn := widget.NewButton("Parcourir...", func() {
+	browseScriptsBtn := widget.NewButton("Browse...", func() {
 		dialog.ShowFolderOpen(func(uri fyne.ListableURI, err error) {
 			if err == nil && uri != nil {
 				path := uri.Path()
 				mw.scriptsPathEntry.SetText(path)
 				mw.config.SetScriptsPath(path)
 				mw.installer = services.NewInstallerService(mw.config)
+				mw.vanillaService = services.NewVanillaService(mw.config.ScriptsPath, path, mw.config.TempPath)
+				mw.loadAllMods()
 			}
 		}, mw.window)
 	})
 	
-	mw.backupCheck = widget.NewCheck("Créer des backups", func(checked bool) {
+	mw.backupCheck = widget.NewCheck("Create backups", func(checked bool) {
 		mw.installer = services.NewInstallerService(mw.config)
 	})
 	mw.backupCheck.SetChecked(false)
@@ -120,9 +142,9 @@ func (mw *MainWindow) setupUI() {
 		func() int { return len(mw.modKeys) },
 		func() fyne.CanvasObject {
 			check := widget.NewCheck("", nil)
-			nameLabel := widget.NewLabel("Nom")
+			nameLabel := widget.NewLabel("Name")
 			descLabel := widget.NewLabel("Description")
-			sizeLabel := widget.NewLabel("Taille")
+			sizeLabel := widget.NewLabel("Size")
 			statusLabel := widget.NewLabel("")
 			
 			return container.NewVBox(
@@ -146,62 +168,79 @@ func (mw *MainWindow) setupUI() {
 			statusLabel := vbox.Objects[2].(*widget.Label)
 			
 			nameLabel.SetText(fmt.Sprintf("%s v%s", mod.Name, mod.Version))
+      if mod.Version == "original" {
+        nameLabel.SetText(fmt.Sprintf("%s", mod.Name))
+      }
+
 			nameLabel.TextStyle.Bold = true
 			descLabel.SetText(mod.Description)
 			sizeLabel.SetText(formatFileSize(mod.FileSize))
 			
 			statusText := ""
-			if mw.downloader.IsModCached(&mod) {
-				statusText += "📦 Cache"
+			
+			// Vérifier le statut selon le type de mod
+			if mod.ID == "vanilla_pack" {
+				// Mod vanilla pack
+				if mw.vanillaService.IsVanillaBacked(&mod) {
+					statusText += "💾 Backed up"
+				}
+			} else {
+				// Mod normal
+				if mw.downloader.IsModCached(&mod) {
+					statusText += "📦 Cached"
+				}
 			}
+			
 			if installed, _ := mw.installer.GetInstallationStatus(&mod); installed {
 				if statusText != "" { statusText += " | " }
-				statusText += "✅ Installé"
+				statusText += "✅ Installed"
 			}
 			statusLabel.SetText(statusText)
 			
-			check.OnChanged = nil
 			check.SetChecked(mw.selectedMods[modKey])
 			check.OnChanged = func(checked bool) {
 				mw.toggleModSelection(modKey, checked)
 			}
+      if mod.FileSize == 0 {
+			  check.OnChanged = func(_ bool) {
+          check.SetChecked(false);
+        }
+      }
 		},
 	)
 	
 	mw.progressBar = widget.NewProgressBar()
 	mw.progressBar.Hide()
-	mw.statusLabel = widget.NewLabel("Prêt")
+	mw.statusLabel = widget.NewLabel("Ready")
 	
-	mw.installBtn = widget.NewButton("Installer sélectionnés", mw.installSelectedMods)
-	refreshBtn := widget.NewButton("Actualiser", mw.refreshModList)
-	backupsBtn := widget.NewButton("Backups", mw.showBackupManager)
+	mw.installBtn = widget.NewButton("Install selected", mw.installSelectedMods)
+	refreshBtn := widget.NewButton("Refresh", mw.refreshModList)
 	cacheBtn := widget.NewButton("Cache", mw.showCacheManager)
 	
 	topSection := container.NewVBox(
 		title,
 		widget.NewSeparator(),
-		widget.NewLabel("Chemin du jeu:"),
+		widget.NewLabel("Game path:"),
 		container.NewBorder(nil, nil, nil, browseGameBtn, mw.gamePathEntry),
-		widget.NewLabel("Chemin des scripts:"),
+		widget.NewLabel("Scripts path:"),
 		container.NewBorder(nil, nil, nil, browseScriptsBtn, mw.scriptsPathEntry),
-		mw.backupCheck,
 	)
 	
 	bottomSection := container.NewVBox(
 		mw.progressBar,
 		mw.statusLabel,
-		container.NewHBox(mw.installBtn, refreshBtn, backupsBtn, cacheBtn),
+		container.NewHBox(mw.installBtn, refreshBtn, cacheBtn),
 	)
 	
 	modListContainer := container.NewBorder(
-		widget.NewLabel("Mods disponibles:"), nil, nil, nil, mw.modList,
+		widget.NewLabel("Available mods:"), nil, nil, nil, mw.modList,
 	)
 	
 	lowerSection := container.NewVSplit(modListContainer, bottomSection)
 	lowerSection.SetOffset(0.75)
 	
 	mainContent := container.NewVSplit(topSection, lowerSection)
-	mainContent.SetOffset(0.3) // Augmenté légèrement pour faire de la place aux nouveaux champs
+	mainContent.SetOffset(0.3)
 	
 	mw.window.SetContent(mainContent)
 }
@@ -217,18 +256,19 @@ func (mw *MainWindow) toggleModSelection(modKey string, selected bool) {
 		if sel { count++ }
 	}
 	if count == 0 {
-		mw.statusLabel.SetText("Prêt")
+		mw.statusLabel.SetText("Ready")
 	} else {
-		mw.statusLabel.SetText(fmt.Sprintf("%d mod(s) sélectionné(s)", count))
+		mw.statusLabel.SetText(fmt.Sprintf("%d mod(s) selected", count))
 	}
 }
 
 func (mw *MainWindow) updateGamePathValidation() {
 	if mw.installer.IsGamePathValid() {
-		mw.statusLabel.SetText("Chemin valide")
+		mw.statusLabel.SetText("Valid path")
 	} else if mw.gamePathEntry.Text != "" {
-		mw.statusLabel.SetText("⚠️ Chemin invalide")
+		mw.statusLabel.SetText("⚠️ Invalid path")
 	}
+	mw.modList.Refresh()
 }
 
 func (mw *MainWindow) installSelectedMods() {
@@ -240,17 +280,21 @@ func (mw *MainWindow) installSelectedMods() {
 	}
 	
 	if len(selectedModKeys) == 0 {
-		dialog.ShowInformation("Aucune sélection", "Sélectionnez au moins un mod", mw.window)
+		dialog.ShowInformation("No selection", "Select at least one mod", mw.window)
 		return
 	}
 	
 	if !mw.installer.IsGamePathValid() {
-		dialog.ShowError(fmt.Errorf("chemin invalide"), mw.window)
+		dialog.ShowError(fmt.Errorf("invalid game path (must end with 'Napoleon Total War')"), mw.window)
+		return
+	}
+  if !mw.installer.IsScriptsPathValid() {
+		dialog.ShowError(fmt.Errorf("invalid scripts path (must end with 'Napoelon')"), mw.window)
 		return
 	}
 	
 	fyne.Do(func() {
-		mw.statusLabel.SetText("Préparation...")
+		mw.statusLabel.SetText("Preparing...")
 		mw.progressBar.Show()
 		mw.progressBar.SetValue(0)
 		mw.installBtn.Disable()
@@ -274,8 +318,30 @@ func (mw *MainWindow) performInstallation(modKeys []string) {
 		mod, exists := mw.availableMods[modKey]
 		if !exists { continue }
 		
+		// Traitement différent pour les mods vanilla
+		if mod.ID == "vanilla_pack" {
+			fyne.Do(func() {
+				mw.statusLabel.SetText(fmt.Sprintf("Restoring %s (%d/%d)", mod.Name, i+1, totalMods))
+			})
+			
+			// Utiliser VanillaService pour restaurer
+			err := mw.vanillaService.RestoreVanillaFile(&mod)
+			if err != nil {
+				fyne.Do(func() {
+					mw.statusLabel.SetText(fmt.Sprintf("Restore error %s", mod.Name))
+					dialog.ShowError(err, mw.window)
+				})
+				return
+			}
+			
+			overallProgress := float64(i+1) / float64(totalMods)
+			fyne.Do(func() { mw.progressBar.SetValue(overallProgress) })
+			continue
+		}
+		
+		// Traitement normal pour les autres mods
 		fyne.Do(func() {
-			mw.statusLabel.SetText(fmt.Sprintf("Téléchargement %s (%d/%d)", mod.Name, i+1, totalMods))
+			mw.statusLabel.SetText(fmt.Sprintf("Downloading %s (%d/%d)", mod.Name, i+1, totalMods))
 		})
 		
 		downloadProgressCallback := func(downloaded, total int64) {
@@ -289,14 +355,14 @@ func (mw *MainWindow) performInstallation(modKeys []string) {
 		filePath, err := mw.downloader.DownloadMod(ctx, &mod, downloadProgressCallback)
 		if err != nil {
 			fyne.Do(func() {
-				mw.statusLabel.SetText(fmt.Sprintf("Erreur téléchargement %s", mod.Name))
+				mw.statusLabel.SetText(fmt.Sprintf("Download error %s", mod.Name))
 				dialog.ShowError(err, mw.window)
 			})
 			return
 		}
 		
 		fyne.Do(func() {
-			mw.statusLabel.SetText(fmt.Sprintf("Installation %s (%d/%d)", mod.Name, i+1, totalMods))
+			mw.statusLabel.SetText(fmt.Sprintf("Installing %s (%d/%d)", mod.Name, i+1, totalMods))
 		})
 		
 		installProgressCallback := func(currentFile string, processed, total int) {
@@ -305,7 +371,7 @@ func (mw *MainWindow) performInstallation(modKeys []string) {
 			fyne.Do(func() {
 				mw.progressBar.SetValue(overallProgress)
 				if currentFile != "" {
-					mw.statusLabel.SetText(fmt.Sprintf("Installation %s: %s", mod.Name, currentFile))
+					mw.statusLabel.SetText(fmt.Sprintf("Installing %s: %s", mod.Name, currentFile))
 				}
 			})
 		}
@@ -313,7 +379,7 @@ func (mw *MainWindow) performInstallation(modKeys []string) {
 		err = mw.installer.InstallMod(ctx, &mod, filePath, installProgressCallback)
 		if err != nil {
 			fyne.Do(func() {
-				mw.statusLabel.SetText(fmt.Sprintf("Erreur installation %s", mod.Name))
+				mw.statusLabel.SetText(fmt.Sprintf("Installation error %s", mod.Name))
 				dialog.ShowError(err, mw.window)
 			})
 			return
@@ -324,16 +390,15 @@ func (mw *MainWindow) performInstallation(modKeys []string) {
 	}
 	
 	fyne.Do(func() {
-		mw.statusLabel.SetText(fmt.Sprintf("Terminé (%d mods)", totalMods))
+		mw.statusLabel.SetText(fmt.Sprintf("Completed (%d mods)", totalMods))
 		mw.refreshModList()
 		
 		_, cacheSize, cacheCount, _ := mw.downloader.GetCacheInfo()
-		backups, _ := mw.installer.GetBackups()
 		
-		message := fmt.Sprintf("Installation terminée!\nMods: %d\nCache: %s (%d fichiers)\nBackups: %d",
-			totalMods, formatFileSize(cacheSize), cacheCount, len(backups))
+		message := fmt.Sprintf("Installation completed!\nMods: %d\nCache: %s (%d files)",
+			totalMods, formatFileSize(cacheSize), cacheCount)
 		
-		dialog.ShowInformation("Terminé", message, mw.window)
+		dialog.ShowInformation("Completed", message, mw.window)
 	})
 }
 
@@ -345,85 +410,11 @@ func (mw *MainWindow) refreshModList() {
 	}
 	
 	mw.availableMods = availableMods
-	mw.modKeys = make([]string, 0, len(availableMods))
-	for key := range availableMods {
-		mw.modKeys = append(mw.modKeys, key)
-	}
+	mw.loadAllMods() // Recharger tous les mods incluant vanilla
 	
 	mw.selectedMods = make(map[string]bool)
 	mw.modList.Refresh()
-	mw.statusLabel.SetText("Prêt")
-}
-
-func (mw *MainWindow) showBackupManager() {
-	backups, err := mw.installer.GetBackups()
-	if err != nil {
-		dialog.ShowError(err, mw.window)
-		return
-	}
-	
-	if len(backups) == 0 {
-		dialog.ShowInformation("Backups", "Aucun backup", mw.window)
-		return
-	}
-	
-	backupList := widget.NewList(
-		func() int { return len(backups) },
-		func() fyne.CanvasObject {
-			return container.NewHBox(
-				widget.NewLabel("Backup"),
-				widget.NewButton("Restaurer", nil),
-				widget.NewButton("Supprimer", nil),
-			)
-		},
-		func(id widget.ListItemID, item fyne.CanvasObject) {
-			if id >= len(backups) { return }
-			
-			backup := backups[id]
-			cont := item.(*fyne.Container)
-			label := cont.Objects[0].(*widget.Label)
-			restoreBtn := cont.Objects[1].(*widget.Button)
-			deleteBtn := cont.Objects[2].(*widget.Button)
-			
-			label.SetText(backup)
-			
-			restoreBtn.OnTapped = func() {
-				dialog.ShowConfirm("Confirmer", 
-					fmt.Sprintf("Restaurer '%s'?", backup),
-					func(confirmed bool) {
-						if confirmed {
-							if err := mw.installer.RestoreBackup(backup); err != nil {
-								dialog.ShowError(err, mw.window)
-							} else {
-								dialog.ShowInformation("Succès", "Restauré", mw.window)
-							}
-						}
-					}, mw.window)
-			}
-			
-			deleteBtn.OnTapped = func() {
-				dialog.ShowConfirm("Confirmer", 
-					fmt.Sprintf("Supprimer '%s'?", backup),
-					func(confirmed bool) {
-						if confirmed {
-							if err := mw.installer.DeleteBackup(backup); err != nil {
-								dialog.ShowError(err, mw.window)
-							} else {
-								dialog.ShowInformation("Succès", "Supprimé", mw.window)
-								mw.showBackupManager()
-							}
-						}
-					}, mw.window)
-			}
-		},
-	)
-	
-	backupWindow := mw.app.NewWindow("Backups")
-	backupWindow.Resize(fyne.NewSize(600, 400))
-	backupWindow.SetContent(container.NewBorder(
-		widget.NewLabel("Backups:"), nil, nil, nil, backupList,
-	))
-	backupWindow.Show()
+	mw.statusLabel.SetText("Ready")
 }
 
 func (mw *MainWindow) showCacheManager() {
@@ -433,17 +424,17 @@ func (mw *MainWindow) showCacheManager() {
 		return
 	}
 	
-	message := fmt.Sprintf("Dossier: %s\nTaille: %s\nFichiers: %d",
+	message := fmt.Sprintf("Folder: %s\nSize: %s\nFiles: %d",
 		cacheDir, formatFileSize(cacheSize), cacheCount)
 	
 	dialog.ShowConfirm("Cache", 
-		message+"\n\nVider le cache?",
+		message+"\n\nClear cache?",
 		func(confirmed bool) {
 			if confirmed {
 				if err := mw.downloader.ClearCache(); err != nil {
 					dialog.ShowError(err, mw.window)
 				} else {
-					dialog.ShowInformation("Succès", "Cache vidé", mw.window)
+					dialog.ShowInformation("Success", "Cache cleared", mw.window)
 				}
 			}
 		}, mw.window)
@@ -466,12 +457,12 @@ func getExampleModsMap() map[string]models.Mod {
 	return map[string]models.Mod{
 		"mod1": {
 			ID: "mod1", Name: "UI Mod", Version: "1.2.3",
-			Description: "Améliore l'interface", FileSize: 2048576,
+			Description: "Improves interface", FileSize: 2048576,
 			DownloadURL: "https://example.com/mod1.zip",
 		},
 		"mod2": {
-			ID: "mod2", Name: "Contenu Extra", Version: "2.0.1", 
-			Description: "Mod de contenu", FileSize: 10485760,
+			ID: "mod2", Name: "Extra Content", Version: "2.0.1", 
+			Description: "Content mod", FileSize: 10485760,
 			DownloadURL: "https://example.com/mod2.zip",
 		},
 	}

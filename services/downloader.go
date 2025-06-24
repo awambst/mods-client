@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"strings"
 	"time"
 
@@ -32,29 +31,13 @@ func NewDownloadService(tempDir string, verifyChecksum bool) *DownloadService {
 		tempDir:   tempDir,
 		verifySum: verifyChecksum,
 	}
-	ds.cacheDir = ds.getCacheDir()
+	ds.cacheDir = filepath.Join(ds.tempDir, "download_cache")
 	ds.ensureDirectoryExists(ds.cacheDir)
 	ds.ensureDirectoryExists(ds.tempDir)
 	return ds
 }
 
-func (ds *DownloadService) getCacheDir() string {
-	switch runtime.GOOS {
-	case "windows":
-		if appData := os.Getenv("LOCALAPPDATA"); appData != "" {
-			return filepath.Join(appData, "ModInstaller", "cache")
-		}
-	case "linux":
-		if home := os.Getenv("HOME"); home != "" {
-			return filepath.Join(home, ".cache", "mod-installer")
-		}
-	case "darwin":
-		if home := os.Getenv("HOME"); home != "" {
-			return filepath.Join(home, "Library", "Caches", "ModInstaller")
-		}
-	}
-	return filepath.Join(os.TempDir(), "mod-installer-cache")
-}
+
 
 func (ds *DownloadService) ensureDirectoryExists(dir string) error {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {

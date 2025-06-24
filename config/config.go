@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // Config contient la configuration de l'application
@@ -34,13 +35,35 @@ type Config struct {
 // Default retourne une configuration par défaut
 func Default() *Config {
 	homeDir, _ := os.UserHomeDir()
+
+  base := ""
+
+  switch runtime.GOOS {
+	  case "windows":
+		  if appData := os.Getenv("LOCALAPPDATA"); appData != "" {
+			  base = filepath.Join(appData, "ModInstaller", "cache")
+		  }
+	  case "linux":
+		  if home := os.Getenv("HOME"); home != "" {
+			  base = filepath.Join(home, ".cache", "mod-installer")
+		  }
+	  case "darwin":
+		  if home := os.Getenv("HOME"); home != "" {
+			  base =filepath.Join(home, "Library", "Caches", "ModInstaller")
+		  }
+  }
+  
+  if base == "" {
+  	base = filepath.Join(os.TempDir(), "mod-installer-cache")
+  }
+
 	
 	return &Config{
-		GamePath:               filepath.Join(homeDir, "Games"),
-		ScriptsPath:            filepath.Join(homeDir, "Games", "scripts"), // Chemin par défaut pour les scripts
-		ModsPath:               filepath.Join(homeDir, ".mod-installer", "mods"),
-		TempPath:               filepath.Join(homeDir, ".mod-installer", "temp"),
-		ConfigPath:             filepath.Join(homeDir, ".mod-installer", "config.json"),
+		GamePath:               filepath.Join(homeDir, "."),
+		ScriptsPath:            filepath.Join(homeDir, "."),
+    ModsPath:               filepath.Join(base, "mods"),
+		TempPath:               filepath.Join(base, "temp"),
+    ConfigPath:             filepath.Join(base, "config.json"),
 		ModRepositoryURL:       "https://api.example.com/mods",
 		APITimeout:             30,
 		WindowWidth:            800,
